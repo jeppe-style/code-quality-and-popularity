@@ -5,19 +5,12 @@ from github import Github
 import ccas.github_repos as github_repos
 from ccas.analysis import plot_success_data
 
-from ccas.constants import data_dir
+from ccas.constants import data_dir, repo_candidates_filename
 
 # TODO
 """
 The main entry point. Invoke as ''.
 """
-
-
-def save_json(data, filename):
-    filename = "{}.json".format(filename)
-    print("saving result to {}/{}".format(data_dir, filename))
-    with open("{}/{}".format(data_dir, filename), "w") as file:
-        file.write(json.dumps(data, indent=4))
 
 
 def read_json(filename):
@@ -41,10 +34,9 @@ def main():
         os.makedirs(data_dir)
 
     github_client = Github(login_or_token=user, password=password)
-    repo_candidates = github_repos.save_repo_data_from_git(github_client)
-    save_json(repo_candidates, "repo_candidates")
+    github_repos.save_repo_data_from_git(github_client)
 
-    # repo_candidates = read_json("repo_candidates")
+    repo_candidates = read_json(repo_candidates_filename)
 
     # calculate the distribution of stars and plot
     plot_success_data(repo_candidates)
