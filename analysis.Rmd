@@ -16,4 +16,6 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{R}
 library(jsonlite)
 repos <- fromJSON("data/repo_candidates.json")
+ggplot(repos, aes(x=stargazers_count)) + geom_density() + geom_vline(data=repos, aes(xintercept=mean(stargazers_count)),linetype="dashed", size=1)
+ggplot(repos, aes(x=num_contributors)) + geom_density() + geom_vline(data=repos, aes(xintercept=mean(num_contributors)),linetype="dashed", size=1)
 ```
