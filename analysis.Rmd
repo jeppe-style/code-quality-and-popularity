@@ -1,0 +1,19 @@
+---
+title: "code-quality-and-popularity"
+author: "Jesper Findahl"
+date: "4/24/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Code Quality and Popularity
+
+## The Repositories
+
+```{R}
+library(jsonlite)
+repos <- fromJSON("data/repo_candidates.json")
+```
