@@ -27,6 +27,7 @@ min_contributors = 10
 min_commits_last_month = 1
 min_commits = 100
 min_files = 50
+max_repo_size = 1000000  # 1 GB in KB (otherwise issues when cloning)
 
 last_month_date = datetime(2017, 3, 22)
 
@@ -41,29 +42,25 @@ def save_json(data, filename):
 
 
 def save_repo_data_from_git(github_client: Github):
-    # TODO - ASK now it sorts per most updated
-    # TODO - ASK something more to store?
+    # sorts per most updated
     # https://developer.github.com/v3/search/#search-repositories
 
     repo_candidates = []
-    num_repos = 0
+    ids = []  # used to store ids so we don't retrieve the same repo multiple times
     for repo in github_client.search_repositories(query='', created=created, language=language, sort='updated'):
 
         print("{} {} {}".format(repo.full_name, repo.language, repo.created_at))
 
-        try:
-
-            valid, contributors = validate_repo(repo, github_client)
-
-            if not valid:
-                continue
-
-        except ConnectionResetError:
-            print("ConnectionResetError - continuing to next")
+        if repo.id in ids:
+            print("this repo was already retrieved - skipping")
             continue
-        except socket.timeout:
-            print("socket.timeout - continuing to next")
+
+        valid, contributors = validate_repo(repo, github_client)
+
+        if not valid:
             continue
+
+        ids.append(repo.id)
 
         repo_candidates.append({
             "id": repo.id,
@@ -81,11 +78,10 @@ def save_repo_data_from_git(github_client: Github):
             "num_contributors": contributors
         })
 
-        num_repos += 1
-        print("found {} candidate repos".format(num_repos))
+        print("found {} candidate repos".format(len(repo_candidates)))
         save_json(repo_candidates, repo_candidates_filename)
 
-        if num_repos >= repos_count:
+        if len(repo_candidates) >= repos_count:
             break
 
 
@@ -123,6 +119,11 @@ def validate_repo(repo: Repository, github_client: Github):
             print("not enough commits")
             return False, 0
 
+        # check repo size (in kilobytes)
+        if repo.size > max_repo_size:
+            print("repo size too big: {}".format(repo.size))
+            return False, 0
+
         # total files
         print("checking total files")
         if retrieve_files(repo, "/", 0) < min_files:
@@ -137,6 +138,10 @@ def validate_repo(repo: Repository, github_client: Github):
         print("ConnectionResetError - skipping repo")
         return False, 0
 
+    except socket.gaierror:
+        print("socket.gaierror - skipping repo")
+        return False, 0
+
     except socket.timeout:
         print("socket.timeout - trying again")
         return validate_repo(repo, github_client)
@@ -144,9 +149,9 @@ def validate_repo(repo: Repository, github_client: Github):
     except RateLimitExceededException:
         print("RateLimitExceededException - waiting and then trying again")
 
-        sleep_interval = github_client.rate_limiting_resettime - datetime.timestamp() + 1
+        sleep_interval = github_client.rate_limiting_resettime - time.time() + 1
 
-        print("sleeping until {}".format(datetime.fromtimestamp(datetime.timestamp() + sleep_interval)))
+        print("sleeping until {}".format(datetime.fromtimestamp(time.time() + sleep_interval)))
 
         time.sleep(sleep_interval)
 
@@ -174,7 +179,7 @@ def main():
     # STEP 1
     # fetch list of projects from github.com (repo url, number of stars, number of contributors)
 
-    with open('../config', 'r') as f:
+    with open('config', 'r') as f:
         user = f.readline().strip()
         password = f.readline().strip()
 

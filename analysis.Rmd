@@ -2,7 +2,10 @@
 title: "code-quality-and-popularity"
 author: "Jesper Findahl"
 date: "4/24/2017"
-output: html_document
+output:
+  pdf_document: 
+    keep_tex: yes
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -13,9 +16,503 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## The Repositories
 
-```{R}
+```{R, echo=FALSE}
 library(jsonlite)
+library(ggplot2)
+library(viridis)
+library(plyr)
 repos <- fromJSON("data/repo_candidates.json")
-ggplot(repos, aes(x=stargazers_count)) + geom_density() + geom_vline(data=repos, aes(xintercept=mean(stargazers_count)),linetype="dashed", size=1)
-ggplot(repos, aes(x=num_contributors)) + geom_density() + geom_vline(data=repos, aes(xintercept=mean(num_contributors)),linetype="dashed", size=1)
+# ggplot(repos, aes(x=stargazers_count)) + geom_density() + geom_vline(data=repos, aes(xintercept=mean(stargazers_count)),linetype="dashed", size=1)
+# ggplot(repos, aes(x=num_contributors)) + geom_density() + geom_vline(data=repos, aes(xintercept=mean(num_contributors)),linetype="dashed", size=1)
+```
+
+```{R, echo=FALSE}
+codeMetrics <- read.table("data/final-code-metrics.csv", header = TRUE, sep = ",")
+# drop the first column that is just the index
+codeMetrics <- codeMetrics[, !(names(codeMetrics) %in% c("X"))]
+
+# remove the projects with non-typical popularity measures
+codeMetricsSubset <- subset(codeMetrics, contributors_total <= stars)
+
+ggplot(codeMetricsSubset, aes(x=stars)) + 
+  geom_density() + 
+  geom_vline(data=codeMetricsSubset, aes(xintercept=mean(stars)),linetype="dashed", size=1)
+
+ggplot(codeMetricsSubset, aes(x=contributors_total)) + 
+  geom_density() + 
+  geom_vline(data=codeMetricsSubset, aes(xintercept=mean(contributors_total)),linetype="dashed", size=1)
+```
+
+## Calculate Correlations
+
+- CBO (Coupling between objects): Counts the number of dependencies a class has. The tools checks for any type used in the entire class (field declaration, method return types, variable declarations, etc). It ignores dependencies to Java itself (e.g. java.lang.String).
+
+- DIT (Depth Inheritance Tree): It counts the number of "fathers" a class has. All classes have DIT at least 1 (everyone inherits java.lang.Object). In order to make it happen, classes must exist in the project (i.e. if a class depends upon X which relies in a jar/dependency file, and X depends upon other classes, DIT is counted as 2).
+
+- NOC (Number of Children): Counts the number of children a class has.
+
+- NOF (Number of fields): Counts the number of fields in a class, no matter its modifiers.
+
+- NOPF (Number of public fields): Counts only the public fields.
+
+- NOSF: Counts only the static fields.
+
+- NOM (Number of methods): Counts the number of methods, no matter its modifiers.
+
+- NOPM (Number of public methods): Counts only the public methods.
+
+- NOSM (Number of static methods): Counts only the static methods.
+
+- NOSI (Number of static invocations): Counts the number of invocations to static methods. It can only count the ones that can be resolved by the JDT.
+
+- RFC (Response for a Class): Counts the number of unique method invocations in a class. As invocations are resolved via static analysis, this implementation fails when a method has overloads with same number of parameters, but different types.
+
+- WMC (Weight Method Class) or McCabe's complexity. It counts the number of branch instructions in a class.
+
+- LOC (Lines of code): It counts the lines of count, ignoring empty lines.
+
+- LCOM (Lack of Cohesion of Methods): Calculates LCOM metric. This is the very first version of metric, which is not reliable. LCOM-HS can be better (hopefully, you will send us a pull request)
+
+### Plot the Correlations (Subset - Averaged per project)
+```{R, warning=FALSE, echo=FALSE}
+
+popular_vars <- c("stars", "contributors_total")
+additional_vars <- c("id", "name")
+metric_vars <- names(codeMetricsSubset)[! names(codeMetricsSubset) %in% c(popular_vars, additional_vars)]
+
+p_val <- 0.05
+
+pop_metric <- character()
+code_metric <- character()
+statistic <- character()
+correlation_class <- character()
+value <- numeric()
+
+for (pop_var in popular_vars) {
+  for (metric_var in metric_vars) {
+
+    # check if normally distributed
+    pop_test <- shapiro.test(codeMetricsSubset[[pop_var]])["p.value"] < p_val
+    # shapiro test takes at least 3 different variables
+    # if less then anyway it is not normally distributed
+    if (length(unique(codeMetricsSubset[[metric_var]])) >3) {
+      metric_test <- shapiro.test(codeMetricsSubset[[metric_var]])["p.value"] < p_val
+    } else {
+      metric_test <- FALSE
+    }
+
+    if (pop_test & metric_test) {
+      method = "pearson"
+    } else {
+      method = "kendall"
+    }
+
+    # split into metric name and statistic
+    code_metric_split <- strsplit(metric_var, "_")
+    
+    corr <- cor(codeMetricsSubset[[metric_var]], codeMetricsSubset[[pop_var]], method = method)
+    corr_class <- ifelse(abs(corr) > 0.7, "1_strong",
+                  ifelse(abs(corr) > 0.5, "2_medium",
+                  ifelse(abs(corr) > 0.3, "3_weak",
+                  "4_no")))
+
+    # compute correlation
+    pop_metric <- c(pop_metric, pop_var)
+    code_metric <- c(code_metric, code_metric_split[[1]][2])
+    statistic <- c(statistic, code_metric_split[[1]][1])
+    correlation_class <- c(correlation_class, corr_class)
+    value <- c(value, corr)
+  }
+}
+
+correlationSubset <- data.frame(pop_metric, code_metric, statistic, correlation_class, value)
+# sort to prepare for heat map
+correlationSubset <- correlationSubset[with(correlationSubset, order(abs(value), decreasing = TRUE)), ]
+rownames(correlationSubset) <-1:nrow(correlationSubset)
+```
+
+```{R, echo=FALSE}
+# create ordered facets
+correlationSubset$facets_order <- factor(correlationSubset$code_metric, levels = unique(correlationSubset$code_metric))
+
+ggplot(data = correlationSubset, aes(x=reorder(statistic, value), y=pop_metric, fill=correlation_class)) +
+  geom_tile(color="white", size=0.1) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        strip.text.y = element_text(angle = 0)) +
+  coord_fixed() +
+  facet_wrap(~facets_order) +
+  scale_fill_viridis(discrete = TRUE) +
+  labs(x = "", y = "")
+```
+
+```{r, echo = FALSE}
+corrSubsetExists <- subset(correlationSubset, abs(value) > 0.3)
+print(corrSubsetExists[1:5])
+```
+
+## Not Aggregated Correlations
+```{R}
+
+# read_csv_filename <- function(filename){
+#   ret <- read.csv(filename, header = TRUE, fill = TRUE)
+#   ret$id <- strsplit(filename, "[-]")[[1]][1]
+#   ret
+# }
+# 
+# setwd("data/code-metrics")
+# filenames <- list.files()
+# fileCodeMetrics <- ldply(filenames, read_csv_filename)
+# setwd("../..")
+# 
+# write.csv(fileCodeMetrics, file = "data/aggregated-code-metrics.csv")
+
+```
+
+```{R}
+fileCodeMetrics <- read.csv("data/aggregated-code-metrics.csv", header = TRUE)
+fileCodeMetrics <- merge(fileCodeMetrics, repos, by.x = "id", by.y = "id")
+fileCodeMetrics <- fileCodeMetrics[, !(names(fileCodeMetrics) %in% c("X"))]
+# remove strange behavior projects
+fileCodeMetrics <- subset(fileCodeMetrics, id %in% codeMetricsSubset$id)
+```
+
+split into categories
+
+```{R}
+starsLowUpper <- quantile(codeMetricsSubset$stars, probs = c(0.333, 0.667))[[1]]
+starsMediumUpper <- quantile(codeMetricsSubset$stars, probs = c(0.333, 0.667))[[2]]
+contributorsLowUpper <- quantile(codeMetricsSubset$contributors_total, probs = c(0.333, 0.667))[[1]]
+contributorsMediumUpper <- quantile(codeMetricsSubset$contributors_total, probs = c(0.333, 0.667))[[2]]
+
+fileCodeMetrics$stars_category <- ifelse(fileCodeMetrics$stargazers_count <= starsLowUpper, "low",
+                                  ifelse(fileCodeMetrics$stargazers_count <= starsMediumUpper, "medium", 
+                                  "high"))
+
+fileCodeMetrics$stars_category <- factor(fileCodeMetrics$stars_category, levels = c("low", "medium", "high"))
+
+fileCodeMetrics$contributors_category <- ifelse(fileCodeMetrics$num_contributors <= contributorsLowUpper, "low",
+                                  ifelse(fileCodeMetrics$num_contributors <= contributorsMediumUpper, "medium", 
+                                  "high"))
+
+fileCodeMetrics$contributors_category <- factor(fileCodeMetrics$contributors_category, levels = c("low", "medium", "high"))
+```
+
+```{R}
+
+count(fileCodeMetrics, vars = "stars_category")
+count(fileCodeMetrics, vars = "contributors_category")
+
+```
+
+```{R, echo=FALSE}
+# Multiple plot function
+#
+# from http://www.cookbook-r.com/Graphs/Multiple_graphs_on_one_page_(ggplot2)/
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+```
+
+### NOSM (Number of static methods)
+
+```{R}
+pContributorsNosm <- ggplot(data = fileCodeMetrics, aes(contributors_category, nosm)) +
+  stat_boxplot(geom = 'errorbar') +
+  geom_boxplot()+
+  labs(x = "# contributors")
+
+# compute lower and upper whiskers
+ylim1 = boxplot.stats(fileCodeMetrics$nosm)$stats[c(1, 5)]
+
+# scale y limits based on ylim1
+
+pContributorsNosm <- pContributorsNosm 
+# + coord_cartesian(ylim = ylim1*1.25)
+```
+
+### NOM (Number of methods)
+
+```{R}
+
+pContributorsNom <- ggplot(data = fileCodeMetrics, aes(contributors_category, nom)) +
+  stat_boxplot(geom = 'errorbar') +
+  geom_boxplot()+
+  labs(x = "# contributors")
+
+# compute lower and upper whiskers
+ylim1 = boxplot.stats(fileCodeMetrics$nom)$stats[c(1, 5)]
+
+# scale y limits based on ylim1
+pContributorsNom <- pContributorsNom + coord_cartesian(ylim = ylim1*1.05)
+```
+
+### LCOM (Lack of Cohesion of Methods): (not reliable)
+
+```{R}
+
+pContributorsLcom <- ggplot(data = fileCodeMetrics, aes(contributors_category, lcom)) +
+  stat_boxplot(geom = 'errorbar') +
+  geom_boxplot()+
+  labs(x = "# contributors")
+
+# compute lower and upper whiskers
+ylim1 = boxplot.stats(fileCodeMetrics$lcom)$stats[c(1, 5)]
+
+# scale y limits based on ylim1
+pContributorsLcom <- pContributorsLcom + coord_cartesian(ylim = ylim1*1.25)
+
+```
+
+### NOPM (Number of public methods)
+
+```{R}
+pContributorsNopm <- ggplot(data = fileCodeMetrics, aes(contributors_category, nopm)) +
+  stat_boxplot(geom = 'errorbar') +
+  geom_boxplot()+
+  labs(x = "# contributors")
+
+# compute lower and upper whiskers
+ylim1 = boxplot.stats(fileCodeMetrics$nopm)$stats[c(1, 5)]
+
+# scale y limits based on ylim1
+pContributorsNopm <- pContributorsNopm + coord_cartesian(ylim = ylim1*1.05)
+```
+
+### CBO (Coupling between objects)
+
+```{R}
+
+pContributorsCbo <- ggplot(data = fileCodeMetrics, aes(contributors_category, cbo)) +
+  stat_boxplot(geom = 'errorbar') +
+  geom_boxplot()+
+  labs(x = "# contributors")
+
+# compute lower and upper whiskers
+ylim1 = boxplot.stats(fileCodeMetrics$wmc)$stats[c(1, 5)]
+
+# scale y limits based on ylim1
+pContributorsCbo <- pContributorsCbo + coord_cartesian(ylim = ylim1*1.05)
+```
+
+### WMC (Weight Method Class) or McCabe's complexity
+
+```{R}
+
+pContributorsWmc <- ggplot(data = fileCodeMetrics, aes(contributors_category, wmc)) +
+  stat_boxplot(geom = 'errorbar') +
+  geom_boxplot()+
+  labs(x = "# contributors")
+
+# compute lower and upper whiskers
+ylim1 = boxplot.stats(fileCodeMetrics$wmc)$stats[c(1, 5)]
+
+pContributorsWmc <- pContributorsWmc + coord_cartesian(ylim = ylim1*1.25)
+```
+
+### Plots
+
+```{R}
+
+# multiplot(pContributorsNosm, pContributorsNom,  pContributorsLcom, pContributorsNopm, pContributorsCbo, pContributorsWmc, cols = 2)
+
+pContributorsNosm
+pContributorsNom
+pContributorsLcom
+pContributorsNopm
+pContributorsCbo
+pContributorsWmc
+
+```
+
+## Sum metrics per project
+
+Not for LCOM (Lack of Cohesion of Methods), CBO, WMC, RFC, DIT (Depth Inheritance Tree), NOC (Number of Children) because they don't make sense to sum but rather aggregate (like earlier).
+
+```{R}
+
+projectCodeMetrics <- aggregate(cbind(nosm, nom, nopm, nof, loc, nosi, nosf, nopf) ~ id + stargazers_count + stars_category + num_contributors + contributors_category + created_at, fileCodeMetrics, sum)
+
+```
+
+### Correlations
+
+```{R, warning=FALSE, echo=FALSE}
+
+popular_vars <- c("stargazers_count", "num_contributors")
+metric_vars_sum <- c("nosm", "nom", "nopm", "nof", "loc", "nosi", "nosf", "nopf")
+
+p_val <- 0.05
+
+pop_metric <- character()
+code_metric <- character()
+correlation_class <- character()
+value <- numeric()
+
+for (pop_var in popular_vars) {
+  for (metric_var in metric_vars_sum) {
+
+    # check if normally distributed
+    pop_test <- shapiro.test(projectCodeMetrics[[pop_var]])["p.value"] < p_val
+    metric_test <- shapiro.test(projectCodeMetrics[[metric_var]])["p.value"] < p_val
+
+    if (pop_test && metric_test) {
+      method = "pearson"
+    } else {
+      method = "kendall"
+    }
+
+    corr <- cor(projectCodeMetrics[[metric_var]], projectCodeMetrics[[pop_var]], method = method)
+    corr_class <- ifelse(abs(corr) > 0.7, "1_strong",
+                  ifelse(abs(corr) > 0.5, "2_medium",
+                  ifelse(abs(corr) > 0.3, "3_weak",
+                  "4_no")))
+
+    # compute correlation
+    pop_metric <- c(pop_metric, pop_var)
+    code_metric <- c(code_metric, metric_var)
+    correlation_class <- c(correlation_class, corr_class)
+    value <- c(value, corr)
+  }
+}
+
+correlationSubsetSum <- data.frame(pop_metric, code_metric, correlation_class, value)
+```
+
+```{R, echo=FALSE}
+# create ordered facets
+ggplot(data = correlationSubsetSum, aes(x=code_metric, y=pop_metric, fill=correlation_class)) +
+  geom_tile(color="white", size=0.1) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        strip.text.y = element_text(angle = 0)) +
+  coord_fixed() +
+  scale_fill_viridis(discrete = TRUE) +
+  labs(x = "", y = "")
+```
+
+
+## Age 
+
+### Categories
+
+```{R}
+projectCodeMetrics$created_at <- as.POSIXct(projectCodeMetrics$created_at)
+
+timeLowUpper <- as.POSIXct(quantile(projectCodeMetrics$created_at, probs = c(0.333, 0.667), type = 1)[[1]])
+timeMediumUpper <- as.POSIXct(quantile(projectCodeMetrics$created_at, probs = c(0.333, 0.667), type = 1)[[2]])
+
+projectCodeMetrics$age_category <- ifelse(projectCodeMetrics$created_at <= timeLowUpper, "old",
+                                  ifelse(projectCodeMetrics$created_at <= timeMediumUpper, "medium",
+                                  "young"))
+
+projectCodeMetrics$age_category <- factor(projectCodeMetrics$age_category, levels = c("young", "medium", "old"))
+
+fileCodeMetrics$age_category <- ifelse(fileCodeMetrics$created_at <= timeLowUpper, "old",
+                                  ifelse(fileCodeMetrics$created_at <= timeMediumUpper, "medium",
+                                  "young"))
+
+fileCodeMetrics$age_category <- factor(fileCodeMetrics$age_category, levels = c("young", "medium", "old"))
+
+codeMetricsSubset <- merge(x = codeMetricsSubset, y = projectCodeMetrics[, c("id", "created_at", "contributors_category")], by = "id")
+
+codeMetricsSubset$age_category <- ifelse(codeMetricsSubset$created_at <= timeLowUpper, "old",
+                                  ifelse(codeMetricsSubset$created_at <= timeMediumUpper, "medium",
+                                  "young"))
+
+codeMetricsSubset$age_category <- factor(codeMetricsSubset$age_category, levels = c("young", "medium", "old"))
+
+```
+
+### Correlation: Age and Popularity
+
+```{R}
+pStarsAge <- ggplot(data = projectCodeMetrics, aes(age_category, stargazers_count)) +
+  stat_boxplot(geom = 'errorbar') +
+  geom_boxplot() +
+  labs(x = "# age")
+
+pContributorsAge <- ggplot(data = projectCodeMetrics, aes(age_category, num_contributors)) +
+  stat_boxplot(geom = 'errorbar') +
+  geom_boxplot() +
+  labs(x = "# age")
+
+# compute lower and upper whiskers
+ylim1 = boxplot.stats(projectCodeMetrics$stargazers_count)$stats[c(1, 5)]
+ylim2 = boxplot.stats(projectCodeMetrics$num_contributors)$stats[c(1, 5)]
+
+# scale y limits based on ylim1
+pStarsAge + coord_cartesian(ylim = ylim1*1.5)
+pContributorsAge + coord_cartesian(ylim = ylim2*1.5)
+
+```
+
+### Age vs # Contributors vs Metric
+```{R}
+
+metric_average <- character()
+
+for (metric in metric_vars) {
+  
+  if (grepl("average", metric)) {
+    metric_average <- c(metric_average, metric)
+  }
+  
+}
+
+for(metric in metric_average) {
+
+  p <- ggplot(data = codeMetricsSubset, aes(contributors_category, codeMetricsSubset[metric])) +
+  stat_boxplot(geom = 'errorbar') +
+  geom_boxplot() +
+  facet_wrap(~age_category ) +
+  labs(x = "# contributors", y = metric)
+
+  # compute lower and upper whiskers
+  ylim1 = boxplot.stats(codeMetricsSubset[[metric]])$stats[c(1, 5)]
+
+  # scale y limits based on ylim1
+  print(p + coord_cartesian(ylim = ylim1*1.25))
+
+}
 ```

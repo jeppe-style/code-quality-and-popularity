@@ -18,4 +18,10 @@ A file named `config` placed in the same directory as the script is required to 
 Requires Python 3.x. So run as `python3 ...`.
 
 ## Folders
-The tool will create 2 folders `data`
+The tool will create 1 folder `data`.
+
+## Usage
+1. Use `get_repo_candidates.py` to fetch the basic data for the repositories via GitHub search API. The result is stored in the file `data\repo_candidates.json`
+2. Use `static_code_metrics.py` to clone the candidate repos and compute the CK metrics. The repos will be stored locally temporarily, one by one. The results per project is stored in `data\code-metrics\` with the ID of the repo in the filename. The aggregated metrics are stored in the file `data\final-code-metrics.csv`.
+ 3. Use the R scripts in `analysis.Rmd` to replicate the results in the project report.
+
